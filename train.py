@@ -8,7 +8,7 @@ import numpy as np
 from model import Model
 from data.data import CellCropsDataset
 from data.utils import load_crops
-from data.transform import train_transform, val_transform
+from data.transform import create_train_transform,create_val_transform
 from torch.utils.data import DataLoader, WeightedRandomSampler
 import json
 from metrics.metrics import Metrics
@@ -80,8 +80,33 @@ if __name__ == "__main__":
 
     writer = SummaryWriter(log_dir=args.base_path)
     config_path = os.path.join(args.base_path, "config.json")
+    
     with open(config_path) as f:
         config = json.load(f)
+        
+    
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+        
+    shift = 5
+    crop_input_size = config["crop_input_size"]
+    aug = config["aug"] if "aug" in config else True
+    if aug:
+        training_transform = create_train_transform(crop_input_size, shift)
+    else:
+        training_transform = create_val_transform(crop_input_size)
+        
+    num_channels = sum(1 for line in open(config["channels_path"])) + 1 - len(config["blacklist"])
+    class_num = config["num_classes"]
+
+    model = Model(num_channels + 1, class_num)
+
+    model = model.to(device=device)
+        
     criterion = torch.nn.CrossEntropyLoss()
     train_crops, val_crops = load_crops(config["root_dir"],
                                         config["channels_path"],
@@ -96,20 +121,12 @@ if __name__ == "__main__":
     if "size_data" in config:
         train_crops = subsample_const_size(train_crops, config["size_data"])
     sampler = define_sampler(train_crops, config["hierarchy_match"])
-    shift = 5
-    crop_input_size = config["crop_input_size"] if "crop_input_size" in config else 100
-    aug = config["aug"] if "aug" in config else True
-    training_transform = train_transform(crop_input_size, shift) if aug else val_transform(crop_input_size)
+
+    
     train_dataset = CellCropsDataset(train_crops, transform=training_transform, mask=True)
-    val_dataset = CellCropsDataset(val_crops, transform=val_transform(crop_input_size), mask=True)
-    train_dataset_for_eval = CellCropsDataset(train_crops, transform=val_transform(crop_input_size), mask=True)
-    device = "cuda"
-    num_channels = sum(1 for line in open(config["channels_path"])) + 1 - len(config["blacklist"])
-    class_num = config["num_classes"]
-
-    model = Model(num_channels + 1, class_num)
-
-    model = model.to(device=device)
+    val_transform_fn = create_val_transform(crop_input_size)
+    val_dataset = CellCropsDataset(val_crops, transform=val_transform_fn, mask=True)
+    train_dataset_for_eval = CellCropsDataset(train_crops, transform=val_transform_fn, mask=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.85)
 

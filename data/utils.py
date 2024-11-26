@@ -5,55 +5,89 @@ import scipy.ndimage as ndimage
 from data.cell_crop import CellCrop
 from PIL import Image
 from skimage import io
+import re
 
 
 def read_channels(path):
-    """
-    Reads channels from a line-separated text file.
-
-    Args:
-        path (PathLike): A path to a text file of line-separated channels.
-
-    Returns:
-        A list of channels.
-    """
     with open(path, 'r') as f:
         channels = f.read().strip().split('\n')
     return channels
 
 
 def filter_channels(channels, blacklist=None):
-    """
-    Filters out "blacklisted" channels.
-
-    Args:
-        channels (List[Tuple[int, str]]): A list of channels.
-        blacklist (List[str], optional): A list of blacklisted channel names. Defaults to None.
-
-    Returns:
-        List[Tuple[int, str]]: A list of channels.
-    """
     return [(i, c) for i, c in enumerate(channels) if c not in blacklist]
 
 
-def load_data(fname) -> np.ndarray:
-    if fname.endswith(".npz"):
-        image = np.load(fname, allow_pickle=True)['data']
-    elif fname.endswith(".tif") or fname.endswith(".tiff"):
-        image = io.imread(fname)
-    return image
+def load_data(fname, channels=[]) -> np.ndarray:
+    fname = Path(fname)
+    if fname.is_dir():
+        if not channels:
+            raise ValueError("Channels must be provided when loading from a directory.")
+
+        images = []
+        for idx, channel_name in channels:
+            # Build a pattern to match files containing the channel name
+            pattern = f"*{channel_name}*"
+            # Find matching files in the directory
+            matching_files = sorted([
+                f for f in fname.glob(pattern)
+                if f.suffix.lower() in ['.npz', '.tif', '.tiff'] and not f.name.startswith("._")
+            ])
+            if not matching_files:
+                raise ValueError(f"No files found for channel '{channel_name}' in directory: {fname}")
+            if len(matching_files) > 1:
+                raise ValueError(f"Multiple files found for channel '{channel_name}' in directory: {fname}. Files: {matching_files}")
+            file_path = matching_files[0]
+            # Load the image from the file
+            if file_path.suffix.lower() == ".npz":
+                image = np.load(file_path, allow_pickle=True)['data']
+            elif file_path.suffix.lower() in [".tif", ".tiff"]:
+                image = io.imread(file_path)
+            else:
+                raise ValueError(f"Unsupported file format: {file_path}")
+            images.append(image)
+        # Stack images along the last dimension
+        image = np.stack(images, axis=-1)
+        return image
+
+    else:
+        # Handle single file case
+        if fname.suffix.lower() == ".npz":
+            image = np.load(fname, allow_pickle=True)['data']
+        elif fname.suffix.lower() in [".tif", ".tiff"]:
+            image = io.imread(fname)
+        else:
+            raise ValueError(f"Unsupported file format: {fname}")
+
+        if channels:
+            # Extract channel indices
+            channels_indices = [idx for idx, _ in channels]
+            image = image[..., channels_indices]
+
+        return image
+
 
 
 def load_image(image_path, cells_path, cells2labels_path, channels=[], to_pad=False, crop_size=0):
-    image = load_data(image_path)
-    if len(channels) > 0:
-        image = image[..., channels]
+    """
+    Load an image, segmentation, and cell-to-label mapping from the provided paths.
+    Handles single files or directories for `image_path` and `cells_path`.
+    """
+
+    # Load image and segmentation data
+    image = load_data(image_path,channels)
     cells = load_data(cells_path).astype(np.int64)
+    
+    # Load cells-to-labels mapping
     if cells2labels_path.endswith(".npz"):
         cells2labels = np.load(cells2labels_path, allow_pickle=True)['data'].astype(np.int32)
     elif cells2labels_path.endswith(".txt"):
         with open(cells2labels_path, "r") as f:
             cells2labels = np.array(f.read().strip().split('\n')).astype(float).astype(int)
+    else:
+        raise ValueError(f"Unsupported file format: {cells2labels_path}")
+    
+    # Pad image and cells if required
     if to_pad:
         image = np.pad(image, ((crop_size // 2, crop_size // 2), (crop_size // 2, crop_size // 2), (0, 0)), 'constant')
         cells = np.pad(cells, ((crop_size // 2, crop_size // 2), (crop_size // 2, crop_size // 2)), 'constant')
@@ -88,6 +122,10 @@ def create_slices(slices, crop_size, bounds):
         all_dim_slices += [_extend_slices_1d(slc, cs, max_size)]
     return tuple(all_dim_slices)
 
+def find_matching_files(directory, pattern):
+    """Find files and directories in a directory matching a pattern using regex."""
+    return [str(f) for f in Path(directory).glob("*") if re.match(pattern, f.name, re.IGNORECASE)]
+
 
 def load_samples(images_dir, cells_dir, cells2labels_dir, images_names, crop_size, to_pad=False, channels=None):
     """
@@ -106,13 +144,30 @@ def load_samples(images_dir, cells_dir, cells2labels_dir, images_names, crop_siz
     cells_dir = Path(cells_dir)
     cells2labels_dir = Path(cells2labels_dir)
     crops = []
+    
+    if not images_names:
+        images_files = [f.stem for f in images_dir.glob("*.npz")] + \
+                       [f.stem for f in images_dir.glob("*.tiff")] + \
+                       [f.stem for f in images_dir.glob("*.tif")]
+        images_dirs = [f.name for f in images_dir.glob("*") if f.is_dir()]
+        images_names = list(set(images_files + images_dirs))  # Combine and deduplicate
+
+        images_names = list(set(images_names))  # Remove duplicates in case of multiple extensions
+
     for image_id in images_names:
-        image_path = glob.glob(str(images_dir / f"{image_id}.npz")) + \
-                     glob.glob(str(images_dir / f"{image_id}.tiff"))
-        cells_path = glob.glob(str(cells_dir / f"{image_id}.npz")) + \
-                     glob.glob(str(cells_dir / f"{image_id}.tiff"))
-        cells2labels_path = glob.glob(str(cells2labels_dir / f"{image_id}.npz")) + \
-                            glob.glob(str(cells2labels_dir / f"{image_id}.txt"))
+        # Regex pattern to match files starting with image_id (case-insensitive)
+        image_pattern = rf"{re.escape(image_id)}.*(\.(npz|tiff|tif)|/)?$"
+        cells_pattern = rf"{re.escape(image_id)}.*\.(npz|tiff|tif)$"
+        cells2labels_pattern = rf"{re.escape(image_id)}.*\.(npz|txt)$"
+        
+        # Match files using regex
+        image_path = find_matching_files(images_dir, image_pattern)
+        cells_path = find_matching_files(cells_dir, cells_pattern)
+        cells2labels_path = find_matching_files(cells2labels_dir, cells2labels_pattern)
+    
+        if not image_path or not cells_path or not cells2labels_path:
+            continue  # Skip if no match is found
+    
         image, cells, cl2lbl = load_image(image_path=image_path[0],
                                           cells_path=cells_path[0],
                                           cells2labels_path=cells2labels_path[0],
@@ -120,20 +175,20 @@ def load_samples(images_dir, cells_dir, cells2labels_dir, images_names, crop_siz
                                           to_pad=to_pad,
                                           crop_size=crop_size)
 
-        objs = ndimage.find_objects(cells)
-        for cell_id, obj in enumerate(objs, 1):
-            try:
-                slices = create_slices(obj, (crop_size, crop_size), cells.shape)
-                label = cl2lbl[cell_id]
-                crops.append(
-                    CellCrop(cell_id=cell_id,
-                             image_id=image_id,
-                             label=label,
-                             slices=slices,
-                             cells=cells,
-                             image=image))
-            except Exception as e:
-                pass
+    objs = ndimage.find_objects(cells)
+    for cell_id, obj in enumerate(objs, 1):
+        try:
+            slices = create_slices(obj, crop_size, cells.shape)
+            label = cl2lbl[cell_id]
+            crops.append(
+                CellCrop(cell_id=cell_id,
+                         image_id=image_id,
+                         label=label,
+                         slices=slices,
+                         cells=cells,
+                         image=image))
+        except Exception as e:
+            pass
     return np.array(crops)
 
 
@@ -165,16 +220,16 @@ def load_crops(root_dir,
 
     channels = read_channels(channels_path)
     channels_filtered = filter_channels(channels, blacklist_channels)
-    channels = [i for i, c in channels_filtered]
+    # channels = [i for i, c in channels_filtered]
     print(channels)
     print('Load training data...')
     train_crops = load_samples(images_dir=data_dir, cells_dir=cells_dir, cells2labels_dir=cells2labels_dir,
                                images_names=train_set, crop_size=crop_size, to_pad=to_pad,
-                               channels=channels)
+                               channels=channels_filtered)
 
     print('Load validation data...')
     val_crops = load_samples(images_dir=data_dir, cells_dir=cells_dir, cells2labels_dir=cells2labels_dir,
                              images_names=val_set, crop_size=crop_size, to_pad=to_pad,
-                             channels=channels)
+                             channels=channels_filtered)
 
     return train_crops, val_crops

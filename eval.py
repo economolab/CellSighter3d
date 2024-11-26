@@ -9,7 +9,7 @@ import numpy as np
 from model import Model
 from data.data import CellCropsDataset
 from data.utils import load_crops
-from data.transform import val_transform
+from data.transform import create_val_transform
 from torch.utils.data import DataLoader
 from metrics.metrics import Metrics
 import json
@@ -57,8 +57,15 @@ if __name__ == "__main__":
                             config["to_pad"],
                             blacklist_channels=config["blacklist"])
     crop_input_size = config["crop_input_size"] if "crop_input_size" in config else 100
-    val_dataset = CellCropsDataset(val_crops, transform=val_transform(crop_input_size), mask=True)
-    device = "cuda"
+    val_transform_fn = create_val_transform(crop_input_size)
+    val_dataset = CellCropsDataset(val_crops, transform=val_transform_fn, mask=True)
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+        
     num_channels = sum(1 for line in open(config["channels_path"])) + 1 - len(config["blacklist"])
     class_num = config["num_classes"]
 
