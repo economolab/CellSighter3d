@@ -137,8 +137,8 @@ class RandomFlip3D:
 
 def create_val_transform(crop_size):
     return transforms.Compose([
-        transforms.ToTensor(),
-        transforms.CenterCrop((crop_size, crop_size)),
+        ToTensor3D()(),
+        CenterCrop3D(crop_size=crop_size),
     ])
 
 # Define this function globally
