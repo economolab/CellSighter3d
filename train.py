@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 import json
 from metrics.metrics import Metrics
 from eval import val_epoch
-
+import napari
 
 def train_epoch(model, dataloader, optimizer, criterion, epoch, writer, device=None):
     model.train()
@@ -139,11 +139,22 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"],
                             num_workers=config["num_workers"], shuffle=False)
     print(len(train_loader), len(val_loader))
-    for i in range(config["epoch_max"]):
+    # Check for existing weights and load the latest model
+    weight_files = [f for f in os.listdir(args.base_path) if f.startswith("weights_") and f.endswith("_count.pth")]
+    if weight_files:
+        latest_weight_file = max(weight_files, key=lambda x: int(x.split("_")[1]))
+        latestDex = int(latest_weight_file.split("_")[1])
+        model.load_state_dict(torch.load(os.path.join(args.base_path, latest_weight_file), map_location=device))
+        print(f"Loaded model weights from {latest_weight_file}")
+    else:
+        print("No pre-trained model found. Starting from scratch.")
+    
+    
+    for i in range(latestDex+1,latestDex+config["epoch_max"]):
         train_epoch(model, train_loader, optimizer, criterion, device=device, epoch=i, writer=writer)
         print(f"Epoch {i} done!")
-        torch.save(model.state_dict(), os.path.join(args.base_path, f"./weights_{i}_count.pth"))
-        if (i % 10 == 0) & (i > 0):
+        if (i % 20 == 0) & (i > 0):
+            torch.save(model.state_dict(), os.path.join(args.base_path, f"./weights_{i}_count.pth"))
             cells_val, results_val = val_epoch(model, val_loader, device=device)
             metrics = Metrics([],
                               writer,

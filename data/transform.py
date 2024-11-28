@@ -131,13 +131,13 @@ class RandomFlip3D:
         """
         for axis in self.flip_axes:
             if np.random.rand() < self.flip_prob:
-                x = torch.flip(x, dims=(axis + 1,))  # +1 because torch.flip expects channel-first tensors
+                x = torch.flip(x, dims=(axis,))  # +1 because torch.flip expects channel-first tensors
         return x
 
 
 def create_val_transform(crop_size):
     return transforms.Compose([
-        ToTensor3D()(),
+        ToTensor3D(),
         CenterCrop3D(crop_size=crop_size),
     ])
 
@@ -164,13 +164,13 @@ def create_train_transform(crop_size, shift):
 
     return torchvision.transforms.Compose([
         torchvision.transforms.Lambda(poisson_sampling),        # Custom 3D poisson sampling
-        torchvision.transforms.Lambda(cell_shape_aug),          # Custom cell augmentation
-        torchvision.transforms.Lambda(env_shape_aug),           # Custom environment augmentation
+        # torchvision.transforms.Lambda(cell_shape_aug),          # Custom cell augmentation
+        # torchvision.transforms.Lambda(env_shape_aug),           # Custom environment augmentation
         ToTensor3D(),                                           # Convert 4D numpy array to PyTorch tensor
         RandomRotation3D(degrees=(0, 360)),                     # Random 3D rotations
-        ShiftAugmentationWithProbability(shift=shift, crop_size=crop_size),  # Shift augmentation
+        # ShiftAugmentationWithProbability(shift=shift, crop_size=crop_size),  # Shift augmentation
         CenterCrop3D(crop_size=crop_size),                      # Center crop for 3D
-        RandomFlip3D(flip_axes=(1, 2), flip_prob=0.75),         # Random horizontal/vertical flips
+        RandomFlip3D(flip_axes=(1, 2,3), flip_prob=0.75),         # Random horizontal/vertical flips
     ])
 
 
