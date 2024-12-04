@@ -175,20 +175,20 @@ def load_samples(images_dir, cells_dir, cells2labels_dir, images_names, crop_siz
                                           to_pad=to_pad,
                                           crop_size=crop_size)
 
-    objs = ndimage.find_objects(cells)
-    for cell_id, obj in enumerate(objs, 1):
-        try:
-            slices = create_slices(obj, crop_size, cells.shape)
-            label = cl2lbl[cell_id]
-            crops.append(
-                CellCrop(cell_id=cell_id,
-                         image_id=image_id,
-                         label=label,
-                         slices=slices,
-                         cells=cells,
-                         image=image))
-        except Exception as e:
-            pass
+        objs = ndimage.find_objects(cells)
+        for cell_id, obj in enumerate(objs, 1):
+            try:
+                slices = create_slices(obj, crop_size, cells.shape)
+                label = cl2lbl[cell_id]
+                crops.append(
+                    CellCrop(cell_id=cell_id,
+                             image_id=image_id,
+                             label=label,
+                             slices=slices,
+                             cells=cells,
+                             image=image))
+            except Exception as e:
+                pass
     return np.array(crops)
 
 

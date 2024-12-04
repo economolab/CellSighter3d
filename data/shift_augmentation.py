@@ -1,14 +1,10 @@
 from torchvision.transforms import Lambda, RandomCrop, CenterCrop
 import numpy as np
 import torch
-import torch
-import numpy as np
-import torch
-import numpy as np
 
 class ShiftAugmentation(torch.nn.Module):
     """
-    Augmentation that shifts each marker channel a few pixels in random directions for 3D data.
+    Augmentation that shifts all channels a few pixels in random directions for 3D data.
     """
     def __init__(self, n_size, shift_max=0):
         """
@@ -47,23 +43,20 @@ class ShiftAugmentation(torch.nn.Module):
 
         return x[start_d:start_d + crop_d, start_h:start_h + crop_h, start_w:start_w + crop_w]
 
-    def random_crop_3d(self, x, crop_size):
+    def random_crop_3d(self, x, crop_size, start_offsets):
         """
-        Random crop a 3D tensor.
+        Random crop a 3D tensor with predefined offsets.
 
         Args:
             x (torch.Tensor): Input tensor of shape (D, H, W).
             crop_size (tuple): Target size (crop_d, crop_h, crop_w).
+            start_offsets (tuple): Starting offsets (start_d, start_h, start_w).
         
         Returns:
             torch.Tensor: Randomly cropped tensor.
         """
-        d, h, w = x.shape
+        start_d, start_h, start_w = start_offsets
         crop_d, crop_h, crop_w = crop_size
-
-        start_d = np.random.randint(0, max(1, d - crop_d + 1))
-        start_h = np.random.randint(0, max(1, h - crop_h + 1))
-        start_w = np.random.randint(0, max(1, w - crop_w + 1))
 
         return x[start_d:start_d + crop_d, start_h:start_h + crop_h, start_w:start_w + crop_w]
 
@@ -77,22 +70,29 @@ class ShiftAugmentation(torch.nn.Module):
         Returns:
             torch.Tensor: Augmented tensor of shape (C, n_size[0], n_size[1], n_size[2]).
         """
+        # Determine dynamic crop size with optional shift
+        crop_size = (
+            self.n_size[0],
+            self.n_size[1] + (self.shift_max if np.random.random() < self.p else 0),
+            self.n_size[2] + (self.shift_max if np.random.random() < self.p else 0),
+        )
+
+        # Compute center crop offsets
+        d, h, w = x.shape[1:]
+        crop_d, crop_h, crop_w = crop_size
+        start_d = np.random.randint(0, max(1, crop_d-self.n_size[0] + 1))
+        start_h = np.random.randint(0, max(1, crop_h-self.n_size[1] - crop_h + 1))
+        start_w = np.random.randint(0, max(1, crop_w - self.n_size[2] + 1))
+
         # Create output tensor on the same device as input
         aug_x = torch.zeros((x.shape[0], *self.n_size), device=x.device)
 
         for i in range(x.shape[0]):
-            # Determine dynamic crop size with optional shift
-            crop_size = (
-                self.n_size[0] + (self.shift_max if np.random.random() < self.p else 0),
-                self.n_size[1] + (self.shift_max if np.random.random() < self.p else 0),
-                self.n_size[2] + (self.shift_max if np.random.random() < self.p else 0),
-            )
-
-            # Apply center crop followed by random crop
+            # Apply center crop followed by a consistent random crop across all channels
             cropped = self.center_crop_3d(x[i], crop_size)
-            shifted = self.random_crop_3d(cropped, self.n_size)
+            shifted = self.random_crop_3d(cropped, self.n_size, (start_d, start_h, start_w))
 
             # Assign to output
-            aug_x[i,...] = shifted
+            aug_x[i, ...] = shifted
 
         return aug_x

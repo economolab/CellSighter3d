@@ -8,12 +8,51 @@ import os
 import numpy as np
 from model import Model
 from data.data import CellCropsDataset
-from data.utils import load_crops
+from data.utils import load_crops,read_channels
 from data.transform import create_val_transform
 from torch.utils.data import DataLoader
 from metrics.metrics import Metrics
 import json
+import napari
+from pathlib import Path
+import glob
+import numpy as np
+import scipy.ndimage as ndimage
+from data.cell_crop import CellCrop
+from PIL import Image
+from skimage import io
+import re
+import pandas
 
+
+def view_cell(cell,root_dir,channels):
+    cell_types_dir = Path(root_dir) / "CellTypes"
+    data_dir = cell_types_dir / "data" / "images"
+    cells_dir = cell_types_dir / "cells"
+    cells2labels_dir = cell_types_dir / "cells2labels"
+    geneAnnotations = cell_types_dir / "genes"
+    image_id = cell['image_id'][0]
+    
+    for idx, channel_name in channels:
+        # Build a pattern to match files containing the channel name
+        pattern = f"*{image_id}*{channel_name}*"
+        # Find matching files in the directory
+        matching_files = sorted([
+            f for f in geneAnnotations.glob(pattern)
+            if f.suffix.lower() in ['.csv'] and not f.name.startswith("._")
+        ])
+        if not matching_files:
+            raise ValueError(f"No files found for channel '{channel_name}' in directory: {geneAnnotations}")
+        if len(matching_files) > 1:
+            raise ValueError(f"Multiple files found for channel '{channel_name}' in directory: {geneAnnotations}. Files: {matching_files}")
+        file_path = matching_files[0]
+        # Load the image from the file
+        if file_path.suffix.lower() == ".csv":
+            geneInfo = pandas.read_csv(file_path)
+        else:
+            raise ValueError(f"Unsupported file format: {file_path}")
+        
+    
 
 def val_epoch(model, dataloader, device=None):
     with torch.no_grad():
@@ -30,7 +69,7 @@ def val_epoch(model, dataloader, device=None):
             y_pred = model(x)
             results += y_pred.detach().cpu().numpy().tolist()
 
-            del batch["image"]
+            # del batch["image"]
             cells += [batch]
             if i % 500 == 0:
                 print(f"Eval {i} / {len(dataloader)}")
@@ -52,7 +91,7 @@ if __name__ == "__main__":
     _, val_crops = load_crops(config["root_dir"],
                             config["channels_path"],
                             config["crop_size"],
-                            config["train_set"],
+                            ["zxcv"],
                             config["val_set"],
                             config["to_pad"],
                             blacklist_channels=config["blacklist"])
@@ -70,14 +109,23 @@ if __name__ == "__main__":
     class_num = config["num_classes"]
 
     model = Model(num_channels+1, class_num)
-    eval_weights = config["weight_to_eval"]
-    model.load_state_dict(torch.load(eval_weights))
+    weight_files = [f for f in os.listdir(args.base_path) if f.startswith("weights_") and f.endswith("_count.pth")]
+    if weight_files:
+        latest_weight_file = max(weight_files, key=lambda x: int(x.split("_")[1]))
+        latestDex = int(latest_weight_file.split("_")[1])
+        model.load_state_dict(torch.load(os.path.join(args.base_path, latest_weight_file), map_location=device))
+        print(f"Loaded model weights from {latest_weight_file}")
+    else:
+        print("No pre-trained model found. Starting from scratch.")
+        eval_weights = config["weight_to_eval"]
+        model.load_state_dict(torch.load(eval_weights))
     model = model.to(device=device)
 
     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"],
                             num_workers=config["num_workers"], shuffle=False, pin_memory=True)
     cells, results = val_epoch(model, val_loader, device=device)
-
+    channels = read_channels(config['channels_path'])
+    
     metrics = Metrics(
         [],
         writer,

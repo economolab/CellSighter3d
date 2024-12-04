@@ -168,7 +168,7 @@ def create_train_transform(crop_size, shift):
         # torchvision.transforms.Lambda(env_shape_aug),           # Custom environment augmentation
         ToTensor3D(),                                           # Convert 4D numpy array to PyTorch tensor
         RandomRotation3D(degrees=(0, 360)),                     # Random 3D rotations
-        # ShiftAugmentationWithProbability(shift=shift, crop_size=crop_size),  # Shift augmentation
+        ShiftAugmentationWithProbability(shift=shift, crop_size=crop_size),  # Shift augmentation
         CenterCrop3D(crop_size=crop_size),                      # Center crop for 3D
         RandomFlip3D(flip_axes=(1, 2,3), flip_prob=0.75),         # Random horizontal/vertical flips
     ])
